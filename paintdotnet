@@ -1,0 +1,221 @@
+
+#!/usr/bin/env bash
+
+set -u
+
+APP_DIR="/opt/paintnetwine"
+APP_SCRIPT="$APP_DIR/paintdotnet.sh"
+
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+
+PDN_DIR="$DATA_HOME/paintdotnet"
+PREFIX="$PDN_DIR/wineprefix"
+
+OVERLAY_UPPER="$PDN_DIR/overlay"
+OVERLAY_WORK="$PDN_DIR/overlay-work"
+
+STATE_DIR="$STATE_HOME/paintdotnet"
+LOG="$STATE_DIR/setup.log"
+
+# Separate markers: prefix setup and DXVK installation.
+MARKER="$PREFIX/PDN_PREFIX_SUCCESSFULLY_MADE"
+DXVK_MARKER="$PREFIX/.paintdotnet-dxvk-installed"
+
+mkdir -p "$PDN_DIR" "$STATE_DIR"
+
+export WINEPREFIX="$PREFIX"
+export WINEARCH=win64
+export WINEDEBUG=-all
+export WINEDLLOVERRIDES="mshtml=;mscoree=d"
+
+error() {
+    yad --error \
+        --title="Paint.NET" \
+        --width=460 \
+        --text="$1"
+    exit 1
+}
+
+# Required commands.
+for cmd in wine wineboot wineserver winecfg winetricks yad bwrap flock; do
+    command -v "$cmd" >/dev/null 2>&1 ||
+        error "Required command not found: $cmd"
+done
+
+[[ -f "$APP_SCRIPT" ]] ||
+    error "Cannot find $APP_SCRIPT"
+
+# ------------------------------------------------
+# Wine and DXVK setup.
+# ------------------------------------------------
+
+setup_worker() {
+    {
+        echo
+        echo "========================================"
+        echo "Paint.NET Wine setup"
+        date
+        echo "Wine: $(wine --version)"
+        echo "Prefix: $PREFIX"
+        echo "========================================"
+
+        mkdir -p "$PREFIX"
+
+        export WINEPREFIX="$PREFIX"
+        export WINEARCH=win64
+        export WINEDEBUG=-all
+        export WINEDLLOVERRIDES="mshtml=;mscoree=d"
+
+        if [[ ! -f "$PREFIX/system.reg" ]]; then
+            echo "Initializing Wine prefix..."
+            wineboot --init || return 1
+            wineserver -w || return 1
+        else
+            echo "Existing Wine prefix detected."
+        fi
+
+        echo "Configuring Windows 11..."
+        winecfg -v win11 || return 1
+        wineserver -w || return 1
+
+        # Do NOT check whether dxgi.dll exists.
+        # Wine itself provides that DLL.
+        # Use a separate marker written only after
+        # the DXVK Winetricks verb succeeds.
+
+        if [[ ! -f "$DXVK_MARKER" ]]; then
+            echo "Installing DXVK..."
+
+            export WINEDLLOVERRIDES="mshtml="
+
+            winetricks -q dxvk || {
+                echo "ERROR: DXVK installation failed."
+                return 1
+            }
+
+            export WINEDLLOVERRIDES="mshtml=;mscoree=d"
+
+            wineserver -w || return 1
+
+            touch "$DXVK_MARKER" || return 1
+
+            echo "DXVK installation completed."
+        else
+            echo "DXVK installation marker found."
+        fi
+
+        wineserver -w || return 1
+
+        touch "$MARKER" || return 1
+
+        echo "SETUP COMPLETE"
+
+    } >> "$LOG" 2>&1
+}
+
+# Run setup if either marker is missing.
+# This also repairs prefixes that were incorrectly
+# marked successful by the previous launcher.
+if [[ ! -f "$MARKER" || ! -f "$DXVK_MARKER" ]]; then
+
+    STATUS_FILE="$(mktemp "$STATE_DIR/status.XXXXXX")"
+
+    (
+        setup_worker
+        result=$?
+        echo "$result" > "$STATUS_FILE"
+        exit "$result"
+    ) &
+
+    SETUP_PID=$!
+
+    (
+        percent=0
+
+        echo "# Preparing Wine prefix..."
+        echo 0
+
+        while kill -0 "$SETUP_PID" 2>/dev/null; do
+            sleep 1
+
+            if (( percent < 95 )); then
+                ((percent++))
+            fi
+
+            echo "$percent"
+
+            case "$percent" in
+                10) echo "# Initializing Wine..." ;;
+                30) echo "# Configuring Windows..." ;;
+                50) echo "# Installing DXVK..." ;;
+                80) echo "# Finishing Wine setup..." ;;
+                95) echo "# Almost done..." ;;
+            esac
+        done
+
+        if [[ -f "$STATUS_FILE" ]] &&
+           [[ "$(cat "$STATUS_FILE")" == "0" ]]; then
+            echo "# Setup complete!"
+        else
+            echo "# Setup failed!"
+        fi
+
+        echo 100
+
+    ) | yad --progress \
+        --title="Paint.NET - First-time setup" \
+        --text="Preparing Wine prefix..." \
+        --width=460 \
+        --height=130 \
+        --center \
+        --auto-close \
+        --no-buttons
+
+    wait "$SETUP_PID"
+    RESULT=$?
+
+    rm -f "$STATUS_FILE"
+
+    if (( RESULT != 0 )); then
+        error "Wine setup failed.
+
+Check the log:
+
+$LOG"
+    fi
+fi
+
+# ------------------------------------------------
+# Persistent OverlayFS setup.
+# ------------------------------------------------
+
+mkdir -p "$OVERLAY_UPPER" "$OVERLAY_WORK"
+
+# OverlayFS requires an empty work directory.
+find "$OVERLAY_WORK" -mindepth 1 -maxdepth 1 \
+    -exec rm -rf -- {} +
+
+# Prevent simultaneous launches from sharing the workdir.
+exec 9>"$PDN_DIR/overlay.lock"
+flock 9
+
+# ------------------------------------------------
+# Launch Paint.NET.
+# ------------------------------------------------
+
+export WINEPREFIX="$PREFIX"
+export WINEARCH=win64
+export WINEDEBUG=-all
+export WINEDLLOVERRIDES="mshtml=;mscoree=d"
+
+exec bwrap \
+    --bind / / \
+    --dev-bind /dev /dev \
+    --proc /proc \
+    --overlay-src "$APP_DIR" \
+    --overlay "$OVERLAY_UPPER" \
+              "$OVERLAY_WORK" \
+              "$APP_DIR" \
+    --chdir "$APP_DIR" \
+    -- "$APP_SCRIPT" "$@"
