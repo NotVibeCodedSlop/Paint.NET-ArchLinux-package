@@ -3,7 +3,7 @@
 Name=Paint.NET
 GenericName=Image Editor
 Comment=Image editing software running through Wine
-Exec=paintdotnet %F
+Exec=/usr/bin/paintdotnet %F
 Icon=/opt/paintnetwine/paintdotnet.ico
 Terminal=false
 Type=Application

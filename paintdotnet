@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 set -u
@@ -16,7 +15,8 @@ OVERLAY_UPPER="$PDN_DIR/overlay"
 OVERLAY_WORK="$PDN_DIR/overlay-work"
 
 STATE_DIR="$STATE_HOME/paintdotnet"
-LOG="$STATE_DIR/setup.log"
+SETUP_LOG="$STATE_DIR/setup.log"
+LOG="$STATE_DIR/main.log"
 
 # Separate markers: prefix setup and DXVK installation.
 MARKER="$PREFIX/PDN_PREFIX_SUCCESSFULLY_MADE"
@@ -30,12 +30,20 @@ export WINEDEBUG=-all
 export WINEDLLOVERRIDES="mshtml=;mscoree=d"
 
 error() {
+    echo "[ERROR] $1" >> "$LOG"
     yad --error \
         --title="Paint.NET" \
         --width=460 \
         --text="$1"
     exit 1
 }
+
+log() {
+    echo "[INFO] $1" >> "$LOG"
+    echo "$1"
+}
+touch "$LOG"
+log "Starting PDN...."
 
 # Required commands.
 for cmd in wine wineboot wineserver winecfg winetricks yad bwrap flock; do
@@ -111,14 +119,14 @@ setup_worker() {
 
         echo "SETUP COMPLETE"
 
-    } >> "$LOG" 2>&1
+    } >> "$SETUP_LOG" 2>&1
 }
 
 # Run setup if either marker is missing.
 # This also repairs prefixes that were incorrectly
 # marked successful by the previous launcher.
 if [[ ! -f "$MARKER" || ! -f "$DXVK_MARKER" ]]; then
-
+    log "Starting setup...."
     STATUS_FILE="$(mktemp "$STATE_DIR/status.XXXXXX")"
 
     (
@@ -182,7 +190,7 @@ if [[ ! -f "$MARKER" || ! -f "$DXVK_MARKER" ]]; then
 
 Check the log:
 
-$LOG"
+$SETUP_LOG"
     fi
 fi
 
@@ -205,16 +213,21 @@ flock 9
 # ------------------------------------------------
 
 parse_file_path() {
-    if [[ $# -lt 1 ]]; then
-        echo "Error: Missing file path argument" >&2
-        return 1
-    fi
+    PARSED_ARGS=()
 
-    # Resolve to absolute path
-    PARSED_FILE_PATH="$(realpath "$1")"
+    # Parse every supplied argument
+    for arg in "$@"; do
+        # Resolve to absolute path
+        parsed_path="$(realpath "$arg")" || {
+            echo "Error: Could not resolve path: $arg" >&2
+            return 1
+        }
 
-    # Convert Unix syntax to Windows syntax
-    PARSED_FILE_PATH="Z:${PARSED_FILE_PATH//\//\\}"
+        # Convert Unix syntax to Windows syntax
+        parsed_path="Z:${parsed_path//\//\\}"
+
+        PARSED_ARGS+=("$parsed_path")
+    done
 }
 
 
@@ -226,7 +239,10 @@ export WINEPREFIX="$PREFIX"
 export WINEARCH=win64
 export WINEDEBUG=-all
 export WINEDLLOVERRIDES="mshtml=;mscoree=d"
-parse_file_path "$@"
+
+# Parse all arguments (safely handles zero arguments)
+parse_file_path "$@" || exit 1
+log "Parsed file path: ${PARSED_ARGS[@]}"
 
 exec bwrap \
     --bind / / \
@@ -237,4 +253,4 @@ exec bwrap \
               "$OVERLAY_WORK" \
               "$APP_DIR" \
     --chdir "$APP_DIR" \
-    -- "$APP_SCRIPT" "$PARSED_FILE_PATH"
+    -- "$APP_SCRIPT" "${PARSED_ARGS[@]}"

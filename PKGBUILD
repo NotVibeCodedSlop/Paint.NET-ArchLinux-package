@@ -1,7 +1,7 @@
 
 pkgname=paintdotnet-wine
 pkgver=5.200.9793.3533
-pkgrel=2
+pkgrel=3
 pkgdesc="Paint.NET running under Wine with DXVK"
 arch=('x86_64')
 url="https://github.com/paintdotnet/Paint.NET-on-Wine"
