@@ -201,6 +201,24 @@ exec 9>"$PDN_DIR/overlay.lock"
 flock 9
 
 # ------------------------------------------------
+# Helper File Path Parser.
+# ------------------------------------------------
+
+parse_file_path() {
+    if [[ $# -lt 1 ]]; then
+        echo "Error: Missing file path argument" >&2
+        return 1
+    fi
+
+    # Resolve to absolute path
+    PARSED_FILE_PATH="$(realpath "$1")"
+
+    # Convert Unix syntax to Windows syntax
+    PARSED_FILE_PATH="Z:${PARSED_FILE_PATH//\//\\}"
+}
+
+
+# ------------------------------------------------
 # Launch Paint.NET.
 # ------------------------------------------------
 
@@ -208,6 +226,7 @@ export WINEPREFIX="$PREFIX"
 export WINEARCH=win64
 export WINEDEBUG=-all
 export WINEDLLOVERRIDES="mshtml=;mscoree=d"
+parse_file_path "$@"
 
 exec bwrap \
     --bind / / \
@@ -218,4 +237,4 @@ exec bwrap \
               "$OVERLAY_WORK" \
               "$APP_DIR" \
     --chdir "$APP_DIR" \
-    -- "$APP_SCRIPT" "$@"
+    -- "$APP_SCRIPT" "$PARSED_FILE_PATH"
