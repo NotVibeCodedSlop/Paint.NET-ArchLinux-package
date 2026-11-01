@@ -113,6 +113,9 @@ setup_worker() {
             echo "DXVK installation marker found."
         fi
 
+        echo "Enabling font smoothing..."
+        wine reg.exe add 'HKCU\Control Panel\Desktop' /v FontSmoothingType /t REG_DWORD /d 2 /f
+
         wineserver -w || return 1
 
         touch "$MARKER" || return 1
